@@ -63,7 +63,7 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
             input_file = law.law.LocalFileTarget("/nfs/dust/cms/user/riegerma/analysis_st_cache/WLCGFileSystem_f760560584/c226ad324e_2325C825-4095-D74F-A98A-5B42318F8DC4.root")
             input_size = law.util.human_bytes(input_file.stat().st_size, fmt=True)
             self.publish_message(f"lfn {lfn}, size is {input_size}")
-            
+
             class ParquetProcessor(ProcessorABC):
 
                 def __init__(self) -> None:
