@@ -7,14 +7,24 @@ Tasks related to obtaining, preprocessing and selecting events.
 import math
 
 import law
+import luigi
+import awkward as ak
 
 from ap.tasks.framework import DatasetTask, HTCondorWorkflow
 from ap.util import ensure_proxy, process_nano_events
 
+from coffea.processor import ProcessorABC, list_accumulator, Runner
+from coffea import processor, nanoevents
+from ap.coffea_util import RunnerWithPassThrough
+import concurrent.futures as cf
 
 class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
 
     sandbox = "bash::$AP_BASE/sandboxes/venv_selection.sh"
+    nworkers = luigi.IntParameter(
+        default=4,
+        description="number of workers to be used for multiprocessing; default: 4",
+    )
 
     def workflow_requires(self):
         # workflow super classes might already define requirements, so extend them
@@ -52,23 +62,74 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
             input_file = law.law.LocalFileTarget("/nfs/dust/cms/user/riegerma/analysis_st_cache/WLCGFileSystem_f760560584/c226ad324e_2325C825-4095-D74F-A98A-5B42318F8DC4.root")
             input_size = law.util.human_bytes(input_file.stat().st_size, fmt=True)
             self.publish_message(f"lfn {lfn}, size is {input_size}")
+            
+            class ParquetProcessor(ProcessorABC):
 
+                def __init__(self) -> None:
+                    super().__init__()
+                    self._accumulator = list_accumulator()
+                    self.request_metadata = True
+                    self.output_fname = "local_testbox/test.parquet"
+
+                @property
+                def accumulator(self):
+                    return self._accumulator
+
+                # def process(self, events, entry_start, entry_stop, outdir):
+                def process(self, events, **kwargs):
+                    # do stuff with the events
+                    import os
+                    import numpy as np
+                    # "correct" Jet.pt by scaling four momenta by 1.1 (pt<30) or 0.9 (pt<=30)
+                    entry_stop = kwargs.get("entrystop", -1)
+                    entry_start = kwargs.get("entrystart", -1)
+                    outdir = os.path.dirname(self.output_fname)
+                    a_mask = ak.flatten(events.Jet.pt < 30)
+                    n_jet_pt = np.asarray(ak.flatten(events.Jet.pt))
+                    n_jet_mass = np.asarray(ak.flatten(events.Jet.mass))
+                    n_jet_pt[a_mask] *= 1.1
+                    n_jet_pt[~a_mask] *= 0.9
+                    n_jet_mass[a_mask] *= 1.1
+                    n_jet_mass[~a_mask] *= 0.9
+                    fname = os.path.join(outdir, f"{entry_start}_{entry_stop}.parquet")
+                    ak.to_parquet(events, fname)
+                    print("this is a test")
+                    self.accumulator.add([fname])
+                    return self.accumulator
+
+                def postprocess(self, accumulator):
+                    import law
+                    # final_merge_path = "test.parquet"
+                    law.pyarrow.merge_parquet_files(accumulator, self.output_fname)
+                    return accumulator
+            runner = RunnerWithPassThrough(
+                executor=processor.FuturesExecutor(workers=self.nworkers, pool=cf.ThreadPoolExecutor),
+                schema=nanoevents.NanoAODSchema,
+                chunksize=40e3,
+            )
+            output = runner(
+                fileset={"Test": ["/nfs/dust/cms/user/riegerma/analysis_st_cache/WLCGFileSystem_f760560584/c226ad324e_2325C825-4095-D74F-A98A-5B42318F8DC4.root"]},
+                treename="Events",
+                processor_instance=ParquetProcessor(),
+            )
+
+            print(f"Created merged file in '{output}'")
             # open with uproot
-            with self.publish_step("load and open ..."):
-                tree = input_file.load(formatter="uproot")["Events"]
-                self.publish_message(f"found {tree.num_entries} events")
+            # with self.publish_step("load and open ..."):
+            #     tree = input_file.load(formatter="uproot")["Events"]
+            #     self.publish_message(f"found {tree.num_entries} events")
 
-            # prepare processing
-            chunk_size = 40000
-            n_chunks = int(math.ceil(tree.num_entries / chunk_size))
-            branches = ["run", "luminosityBlock", "event", "nJet", "Jet_*"]
-            branches = [k for k in tree.keys() if law.util.multi_match(k, branches)]
+            # # prepare processing
+            # chunk_size = 40000
+            # n_chunks = int(math.ceil(tree.num_entries / chunk_size))
+            # branches = ["run", "luminosityBlock", "event", "nJet", "Jet_*"]
+            # branches = [k for k in tree.keys() if law.util.multi_match(k, branches)]
 
-            # iterate over the file
-            gen = process_nano_events(tree, chunk_size=chunk_size, expressions=branches)
-            for i, events, *_ in self.iter_progress(gen, n_chunks, msg="iterate ..."):
-                # do sth meaningful here ...
-                print(i, events.Jet.pt)
+            # # iterate over the file
+            # gen = process_nano_events(tree, chunk_size=chunk_size, expressions=branches)
+            # for i, events, *_ in self.iter_progress(gen, n_chunks, msg="iterate ..."):
+            #     # do sth meaningful here ...
+            #     print(i, events.Jet.pt)
 
                 # TODO 1: it looks like the NanoEventsArray copied the preloaded input chunk,
                 #         so a) is this true?, b) is this normal?, and c) would this also be the
