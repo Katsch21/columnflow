@@ -11,12 +11,13 @@ import luigi
 import awkward as ak
 
 from ap.tasks.framework import DatasetTask, HTCondorWorkflow
-from ap.util import ensure_proxy, process_nano_events
+from ap.util import ensure_proxy
 
-from coffea.processor import ProcessorABC, list_accumulator, Runner
+from coffea.processor import ProcessorABC, list_accumulator
 from coffea import processor, nanoevents
 from ap.coffea_util import RunnerWithPassThrough
 import concurrent.futures as cf
+
 
 class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
 
@@ -48,7 +49,7 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
         # create a temp dir for saving intermediate files
         tmp_dir = law.LocalDirectoryTarget(is_tmp=True)
         tmp_dir.touch()
-        output_chunks = []
+        # output_chunks = []
 
         # loop over all input file indices requested by this branch
         for file_index in self.branch_data:
@@ -131,21 +132,21 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
             #     # do sth meaningful here ...
             #     print(i, events.Jet.pt)
 
-                # TODO 1: it looks like the NanoEventsArray copied the preloaded input chunk,
-                #         so a) is this true?, b) is this normal?, and c) would this also be the
-                #         case if we used "from_root" instead of "from_preloaded"?
+            # TODO 1: it looks like the NanoEventsArray copied the preloaded input chunk,
+            #         so a) is this true?, b) is this normal?, and c) would this also be the
+            #         case if we used "from_root" instead of "from_preloaded"?
 
-                # TODO 2: how to extract a zipped awkward array again from the NanoEventsArray
-                #         without copying?
+            # TODO 2: how to extract a zipped awkward array again from the NanoEventsArray
+            #         without copying?
 
-                # TODO 3: how to save to parquet (which will again be I/O bound) using threads such
-                #         that the next event processing iteration can start without the need to
-                #         wait until the file is written
+            # TODO 3: how to save to parquet (which will again be I/O bound) using threads such
+            #         that the next event processing iteration can start without the need to
+            #         wait until the file is written
 
-                # save the batch as parquet
-                # chunk = tmp_dir.child(f"file_{file_index}_{i}.parquet", type="f")
-                # ak.to_parquet(batch, chunk.path)
-                # output_chunks.append(chunk)
+            # save the batch as parquet
+            # chunk = tmp_dir.child(f"file_{file_index}_{i}.parquet", type="f")
+            # ak.to_parquet(batch, chunk.path)
+            # output_chunks.append(chunk)
 
         # merge the files
         # with self.output().localize("w") as output:

@@ -1,12 +1,10 @@
 from __future__ import print_function, division
-from concurrent.futures import process
 from coffea.processor import Runner, ProcessorABC
 from coffea.processor.executor import WorkItem, ParquetFileContext
 from coffea.processor.dataframe import LazyDataFrame
 from coffea.nanoevents import schemas, NanoEventsFactory
 import uuid
 import uproot
-import sys
 import time
 import cloudpickle
 import lz4.frame as lz4f
