@@ -10,7 +10,6 @@ import cloudpickle
 import lz4.frame as lz4f
 from dataclasses import asdict
 from typing import Dict
-import json
 from collections.abc import MutableMapping
 from typing import Callable
 
@@ -48,6 +47,18 @@ class RunnerWithPassThrough(Runner):
 
         # pass all other arguments on to init function of super
         super().__init__(*args, **kwargs)
+
+    @property
+    def read_options(self):
+        return self.__read_options
+
+    @read_options.setter
+    def read_options(self, input_dict):
+        if isinstance(input_dict, dict):
+            self.__read_options = input_dict
+        else:
+            msg = f"property 'read_options' is a dict, received {type(input_dict)}"
+            raise ValueError(msg)
 
     # @staticmethod
     def _work_function(
