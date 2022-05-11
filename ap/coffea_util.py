@@ -31,17 +31,27 @@ class CustomNanoEventsFactory(NanoEventsFactory):
 class RunnerWithPassThrough(Runner):
 
     def __init__(self, *args, **kwargs):
-        print("initializing Runner with pass through")
-        self.__processor_passthrough = kwargs.get("processor_passthrough", {})
-        print("pass through arguments:")
-        print(json.dumps(self.__processor_passthrough, indent=4))
-        kwargs.pop("processor_passthrough", None)
-        super().__init__(*args, **kwargs)
-        print("done initializing!")
-        print(type(self))
+        """
+        Init function of sub class. This function extends the init of the 
+        *Runner* class with the following keywords:
 
-    @staticmethod
+        processor_passthrough (dict): commands that need to be passed to the
+                                      processor instance (right now does nothing)
+        read_options (dict):            commands that are passed to uproot
+                                        or parquet via the NanoEventsFactory
+        """
+        # collect the extensions from the keyword arguments
+        self.__processor_passthrough = kwargs.get("processor_passthrough", {})
+        kwargs.pop("processor_passthrough", None)
+        self.__read_options = kwargs.get("read_options", {})
+        kwargs.pop("read_options", None)
+
+        # pass all other arguments on to init function of super
+        super().__init__(*args, **kwargs)
+
+    # @staticmethod
     def _work_function(
+        self,
         format: str,
         xrootdtimeout: int,
         mmap: bool,
@@ -101,6 +111,7 @@ class RunnerWithPassThrough(Runner):
                         schemaclass=schema,
                         metadata=metadata,
                         access_log=materialized,
+                        uproot_options=self.__read_options
                     )
                     events = factory.events()
                 elif format == "parquet":
@@ -122,6 +133,7 @@ class RunnerWithPassThrough(Runner):
                         schemaclass=schema,
                         metadata=metadata,
                         skyhook_options=skyhook_options,
+                        parquet_options=self.__read_options
                     )
                     events = factory.events()
             else:
