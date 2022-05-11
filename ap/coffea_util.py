@@ -17,6 +17,17 @@ from typing import Callable
 __all__ = ["RunnerWithPassThrough"]
 
 
+class CustomNanoEventsFactory(NanoEventsFactory):
+    """
+    NanoEventsFactory which includes a switch for lazy/greedy IO of events.
+    """
+    def __init__(self, schema, mapping, partition_key, cache=None):
+        super().__init__(schema, mapping, partition_key, cache)
+
+    def events(self):
+        return super().events()
+
+
 class RunnerWithPassThrough(Runner):
 
     def __init__(self, *args, **kwargs):
@@ -81,7 +92,7 @@ class RunnerWithPassThrough(Runner):
                 # change here
                 if format == "root":
                     materialized = []
-                    factory = NanoEventsFactory.from_root(
+                    factory = CustomNanoEventsFactory.from_root(
                         file=file,
                         treepath=item.treename,
                         entry_start=item.entrystart,
@@ -105,7 +116,7 @@ class RunnerWithPassThrough(Runner):
                         skyhook_options["ceph_config_path"] = ceph_config_path
                         skyhook_options["ceph_data_pool"] = ceph_data_pool
 
-                    factory = NanoEventsFactory.from_parquet(
+                    factory = CustomNanoEventsFactory.from_parquet(
                         file=item.filename,
                         treepath=item.treename,
                         schemaclass=schema,
