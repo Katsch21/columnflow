@@ -7,24 +7,44 @@ import uuid
 import uproot
 import time
 import cloudpickle
+import awkward
+import weakref
 import lz4.frame as lz4f
 from dataclasses import asdict
 from typing import Dict
 from collections.abc import MutableMapping
 from typing import Callable
+from functools import partial
 
 __all__ = ["RunnerWithPassThrough"]
 
 
-class CustomNanoEventsFactory(NanoEventsFactory):
+def _key_formatter(prefix, partition, form_key, attribute):
+    return prefix + f"/{partition}/{form_key}/{attribute}"
+
+
+class EagerNanoEventsFactory(NanoEventsFactory):
     """
     NanoEventsFactory which includes a switch for lazy/greedy IO of events.
     """
-    def __init__(self, schema, mapping, partition_key, cache=None):
-        super().__init__(schema, mapping, partition_key, cache)
 
     def events(self):
-        return super().events()
+        """Build events"""
+        print("initializing eager events")
+        events = self._events()
+        if events is None:
+            behavior = dict(self._schema.behavior)
+            behavior["__events_factory__"] = self
+            events = awkward.from_buffers(
+                self._schema.form,
+                len(self),
+                self._mapping,
+                key_format=partial(_key_formatter, self._partition_key),
+                behavior=behavior,
+            )
+            self._events = weakref.ref(events)
+
+        return events
 
 
 class RunnerWithPassThrough(Runner):
@@ -44,21 +64,33 @@ class RunnerWithPassThrough(Runner):
         kwargs.pop("processor_passthrough", None)
         self.__read_options = kwargs.get("read_options", {})
         kwargs.pop("read_options", None)
+        self.__io_mode = kwargs.get("io_mode", "lazy")
+        kwargs.pop("io_mode", None)
 
         # pass all other arguments on to init function of super
         super().__init__(*args, **kwargs)
 
     @property
-    def read_options(self):
+    def read_options(self) -> Dict:
         return self.__read_options
 
     @read_options.setter
-    def read_options(self, input_dict):
+    def read_options(self, input_dict) -> None:
         if isinstance(input_dict, dict):
             self.__read_options = input_dict
         else:
             msg = f"property 'read_options' is a dict, received {type(input_dict)}"
             raise ValueError(msg)
+
+    @property
+    def io_mode(self) -> str:
+        return self.__io_mode
+
+    @io_mode.setter
+    def io_mode(self, value) -> None:
+        if value not in ["lazy", "eager"]:
+            raise ValueError("io_mode for events must by 'lazy' or 'eager'!")
+        self.__io_mode = value
 
     # @staticmethod
     def _work_function(
@@ -102,6 +134,7 @@ class RunnerWithPassThrough(Runner):
         if item.usermeta is not None:
             metadata.update(item.usermeta)
 
+        event_factory = NanoEventsFactory if self.io_mode == "lazy" else EagerNanoEventsFactory
         with filecontext as file:
             if schema is None:
                 # To deprecate
@@ -113,7 +146,7 @@ class RunnerWithPassThrough(Runner):
                 # change here
                 if format == "root":
                     materialized = []
-                    factory = CustomNanoEventsFactory.from_root(
+                    factory = event_factory.from_root(
                         file=file,
                         treepath=item.treename,
                         entry_start=item.entrystart,
@@ -122,7 +155,7 @@ class RunnerWithPassThrough(Runner):
                         schemaclass=schema,
                         metadata=metadata,
                         access_log=materialized,
-                        uproot_options=self.__read_options
+                        **self.__read_options
                     )
                     events = factory.events()
                 elif format == "parquet":
@@ -138,13 +171,13 @@ class RunnerWithPassThrough(Runner):
                         skyhook_options["ceph_config_path"] = ceph_config_path
                         skyhook_options["ceph_data_pool"] = ceph_data_pool
 
-                    factory = CustomNanoEventsFactory.from_parquet(
+                    factory = event_factory.from_parquet(
                         file=item.filename,
                         treepath=item.treename,
                         schemaclass=schema,
                         metadata=metadata,
                         skyhook_options=skyhook_options,
-                        parquet_options=self.__read_options
+                        **self.__read_options
                     )
                     events = factory.events()
             else:
