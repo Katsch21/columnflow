@@ -5,10 +5,12 @@ Tasks related to obtaining, preprocessing and selecting events.
 """
 
 import math
+from secrets import choice
 
 import law
 import luigi
 import awkward as ak
+import os
 
 from ap.tasks.framework import DatasetTask, HTCondorWorkflow
 from ap.util import ensure_proxy
@@ -25,6 +27,11 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
     nworkers = luigi.IntParameter(
         default=4,
         description="number of workers to be used for multiprocessing; default: 4",
+    )
+    io_mode = luigi.ChoiceParameter(
+        choices=["lazy", "eager"],
+        default="lazy",
+        description="mode for io of events. Choices: lazy, eager",
     )
 
     def workflow_requires(self):
@@ -59,8 +66,8 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
             lfn = str(lfns[file_index])
 
             # always use the INFN redirector for now
-            # input_file = law.wlcg.WLCGFileTarget(lfn, fs="wlcg_fs_infn")
-            input_file = law.law.LocalFileTarget("/nfs/dust/cms/user/riegerma/analysis_st_cache/WLCGFileSystem_f760560584/c226ad324e_2325C825-4095-D74F-A98A-5B42318F8DC4.root")
+            input_file = law.wlcg.WLCGFileTarget(lfn, fs="wlcg_fs_infn")
+            # input_file = law.law.LocalFileTarget("/nfs/dust/cms/user/pkeicher/uhh/u4h/analysis_playground/local_testbox/2325C825-4095-D74F-A98A-5B42318F8DC4.root")
             input_size = law.util.human_bytes(input_file.stat().st_size, fmt=True)
             self.publish_message(f"lfn {lfn}, size is {input_size}")
 
@@ -71,10 +78,19 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
                     self._accumulator = list_accumulator()
                     self.request_metadata = True
                     self.output_fname = "local_testbox/test.parquet"
-
+                    self.__law_task = None
+                    self.prefix = "branch_"
                 @property
                 def accumulator(self):
                     return self._accumulator
+
+                @property
+                def law_task(self):
+                    return self.__law_task
+
+                @law_task.setter
+                def law_task(self, task):
+                    self.__law_task = task
 
                 # def process(self, events, entry_start, entry_stop, outdir):
                 def process(self, events, **kwargs):
@@ -82,8 +98,11 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
                     import os
                     import numpy as np
                     # "correct" Jet.pt by scaling four momenta by 1.1 (pt<30) or 0.9 (pt<=30)
+
                     entry_stop = kwargs.get("entrystop", -1)
                     entry_start = kwargs.get("entrystart", -1)
+                    print(f"calibrating objects {entry_start} - {entry_stop}")
+
                     outdir = os.path.dirname(self.output_fname)
                     a_mask = ak.flatten(events.Jet.pt < 30)
                     n_jet_pt = np.asarray(ak.flatten(events.Jet.pt))
@@ -92,27 +111,49 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
                     n_jet_pt[~a_mask] *= 0.9
                     n_jet_mass[a_mask] *= 1.1
                     n_jet_mass[~a_mask] *= 0.9
-                    fname = os.path.join(outdir, f"{entry_start}_{entry_stop}.parquet")
+                    fname = os.path.join(outdir,
+                                f"{self.prefix}_{entry_start}_{entry_stop}.parquet")
                     ak.to_parquet(events, fname)
-                    print("this is a test")
                     self.accumulator.add([fname])
+                    print("\texit")
                     return self.accumulator
 
                 def postprocess(self, accumulator):
                     import law
                     # final_merge_path = "test.parquet"
-                    law.pyarrow.merge_parquet_files(accumulator, self.output_fname)
+                    # law.pyarrow.merge_parquet_files(sorted(accumulator), self.output_fname)
+                    print("merging files")
+                    sorted_accu = sorted(accumulator)
+                    print(sorted_accu)
+                    law.pyarrow.merge_parquet_task(self.law_task, sorted_accu,
+                                            self.output_fname, force=True,
+                                            local=True)
                     return accumulator
+
+            load_columns = ["run", "luminosityBlock", "event"]
+            load_columns += "Jet_pt Jet_mass nJet".split()
+            # load_columns = ["*"]
             runner = RunnerWithPassThrough(
-                executor=processor.FuturesExecutor(workers=self.nworkers, pool=cf.ThreadPoolExecutor),
+                executor=processor.FuturesExecutor(workers=self.nworkers,
+                                                # pool=cf.ThreadPoolExecutor
+                                                ),
                 schema=nanoevents.NanoAODSchema,
                 chunksize=40e3,
+                read_options={"iteritems_options": {"filter_name": load_columns}},
             )
-            output = runner(
-                fileset={"Test": ["/nfs/dust/cms/user/riegerma/analysis_st_cache/WLCGFileSystem_f760560584/c226ad324e_2325C825-4095-D74F-A98A-5B42318F8DC4.root"]},
-                treename="Events",
-                processor_instance=ParquetProcessor(),
-            )
+            runner.io_mode = self.io_mode
+            real_file = input_file.load(formatter="uproot")
+            print(f"file exists here: {real_file.path}")
+            proc = ParquetProcessor()
+            proc.law_task = self
+            proc.prefix = f"file_{file_index}"
+            proc.output_fname = os.path.join(tmp_dir.path, f"file_{file_index}_corrected.parquet")
+            with input_file.localize("r") as tmp:
+                output = runner(
+                    fileset={"Test": [tmp.path]},
+                    treename="Events",
+                    processor_instance=proc,
+                )
 
             print(f"Created merged file in '{output}'")
             # open with uproot
