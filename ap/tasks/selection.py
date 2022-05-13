@@ -111,6 +111,12 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
                     n_jet_pt[~a_mask] *= 0.9
                     n_jet_mass[a_mask] *= 1.1
                     n_jet_mass[~a_mask] *= 0.9
+
+                    events["Jet", "pt_jec_up"] = events.Jet.pt * 1.05
+                    events["Jet", "mass_jec_up"] = events.Jet.mass * 1.05
+                    events["Jet", "pt_jec_down"] = events.Jet.pt * 0.95
+                    events["Jet", "mass_jec_down"] = events.Jet.mass * 0.95
+                    
                     fname = os.path.join(outdir,
                                 f"{self.prefix}_{entry_start}_{entry_stop}.parquet")
                     ak.to_parquet(events, fname)
@@ -142,8 +148,7 @@ class CalibrateObjects(DatasetTask, law.LocalWorkflow, HTCondorWorkflow):
                 read_options={"iteritems_options": {"filter_name": load_columns}},
             )
             runner.io_mode = self.io_mode
-            real_file = input_file.load(formatter="uproot")
-            print(f"file exists here: {real_file.path}")
+
             proc = ParquetProcessor()
             proc.law_task = self
             proc.prefix = f"file_{file_index}"
